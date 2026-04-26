@@ -1,13 +1,5 @@
-# pip install bitsandbytes
-# pip install --upgrade transformers
-# pip install accelerate
-# pip install -e /workspace/data/Ashutosh/diffusers-main
-# pip install --upgrade huggingface-hub
-# pip install soxs
-# pip install peft
-#
 # Example run:
-#   python generate_images.py \
+#   python ET_infer.py \
 #       --model_name sd15 \
 #       --prompts_pt /path/to/prompts.pt \
 #       --root_output_dir /path/to/output \
