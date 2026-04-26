@@ -191,7 +191,7 @@ def generate_from_pt(
     """
     Loads prompts from 'pt_path', then for each prompt generates 'images_per_prompt'
     images and saves them under:
-        root_output_dir/<artist>/<artist>_<artwork>_<sample>.png
+        root_output_dir/<artist>_<artwork>_<sample>.png
     """
     prompts = load_prompts_list(pt_path)
 
@@ -211,7 +211,7 @@ def generate_from_pt(
         safe_artist  = sanitize_name(artist if artist else "Unknown")
         safe_artwork = sanitize_name(artwork)
 
-        artist_dir = root_path / safe_artist
+        artist_dir = root_path 
         ensure_dir(artist_dir)
 
         print(f"\n[{idx}/{len(unique_prompts)}] Generating: '{artwork}' in the style of '{artist}'")
