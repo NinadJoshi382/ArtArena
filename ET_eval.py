@@ -1,7 +1,7 @@
 # Example runs:
 #
 #   CLIP:
-#   python compute_proximity_scores.py \
+#   python ET_eval.py \
 #       --proximity_metric clip \
 #       --mapping_json /path/to/mapping.json \
 #       --output_csv /path/to/clip_scores.csv \
@@ -11,7 +11,7 @@
 #       --top_n 10
 #
 #   CSD:
-#   python compute_proximity_scores.py \
+#   python ET_eval.py \
 #       --proximity_metric csd \
 #       --model_path /path/to/checkpoint.pth \
 #       --mapping_json /path/to/mapping.json \
@@ -22,7 +22,7 @@
 #       --top_n 10
 #
 #   LPIPS:
-#   python compute_proximity_scores.py \
+#   python ET_eval.py \
 #       --proximity_metric lpips \
 #       --mapping_json /path/to/mapping.json \
 #       --output_csv /path/to/lpips_scores.csv \
