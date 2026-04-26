@@ -96,7 +96,7 @@ parser.add_argument(
 parser.add_argument(
     "--top_n",
     type=int,
-    default=10,
+    default=20,
     help="Number of top pairs to save (default: 10)"
 )
 parser.add_argument(
