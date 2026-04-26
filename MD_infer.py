@@ -1,12 +1,5 @@
-# pip install bitsandbytes
-# pip install --upgrade transformers
-# pip install accelerate
-# pip install -e /workspace/data/Ashutosh/diffusers-main
-# pip install --upgrade huggingface-hub
-# pip install peft
-#
 # Example run:
-#   python generate_tournament.py \
+#   python MD_infer.py \
 #       --model_name sd15 \
 #       --out_json /path/to/clip_prompts_renamed.json \
 #       --suffix_pt /path/to/suffix.pt \
