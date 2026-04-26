@@ -41,18 +41,18 @@ Rules (all metrics):
     - Invalid rounds (load failure or NaN) are skipped.
 
 Usage examples:
-    python tournament_eval.py --metric clip \\
+    python MD_eval.py --metric clip \\
         --t1_path /path/to/Sets_prompt_dir_dict_learning.pt \\
         --artwork_map_path /path/to/simple_maps.pt \\
         --output_dir /path/to/output
 
-    python tournament_eval.py --metric csd \\
+    python MD_eval.py --metric csd \\
         --t1_path /path/to/Sets_prompt_dir_dict_learning.pt \\
         --artwork_map_path /path/to/simple_maps.pt \\
         --output_dir /path/to/output \\
         --csd_checkpoint /path/to/checkpoint.pth
 
-    python tournament_eval.py --metric lpips \\
+    python MD_eval.py --metric lpips \\
         --t1_path /path/to/Sets_prompt_dir_dict_learning.pt \\
         --artwork_map_path /path/to/simple_maps.pt \\
         --output_dir /path/to/output \\
