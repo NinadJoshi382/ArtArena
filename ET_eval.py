@@ -1,10 +1,3 @@
-# pip install transformers
-# pip install torch torchvision
-# pip install Pillow
-# pip install lpips                  # only needed for --proximity_metric lpips
-# # CSD setup (only needed for --proximity_metric csd):
-# #   git clone https://github.com/learn2phoenix/CSD && pip install -e CSD/
-#
 # Example runs:
 #
 #   CLIP:
