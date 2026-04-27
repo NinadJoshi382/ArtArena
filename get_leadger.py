@@ -1,10 +1,10 @@
 """
-get_csv_delta.py
+get_leadger.py
 ----------------
 Tournament CSV builder for style-leakage experiments.
 
 Usage:
-    python Tournament/get_csv_delta.py \\
+    python get_leadger.py \\
         --delta 0.01 \\
         --metric clip \\
         --root_dir /path/to/tournament/results \\
