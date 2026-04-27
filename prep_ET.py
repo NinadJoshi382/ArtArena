@@ -12,8 +12,11 @@ Usage:
         --prompt_save   /path/to/prompts.pt \
         --mapping_json_save /path/to/mapping.json \
         --root_output_dir   /path/to/output \
-        [--images_per_prompt 1] \
+        [--num_imgs 1] \
         [--name_split last]
+
+Generated filename index convention: 1-based, zero-padded to 2 digits.
+    e.g. num_imgs=2  →  artist_artwork_01.png, artist_artwork_02.png
 """
 
 import argparse
@@ -95,18 +98,20 @@ def generated_paths_for(
     artist: str,
     artwork: str,
     root_output_dir: Path,
-    images_per_prompt: int,
+    num_imgs: int,
 ) -> list[str]:
     """
     Mirror the naming convention used by generate_from_pt:
-        root_output_dir/<artist>_<artwork>_<sample>.png
-    where spaces in names are replaced with underscores.
+        root_output_dir/<artist>_<artwork>_<idx>.png
+    where spaces in names are replaced with underscores and <idx> is
+    1-based and zero-padded to 2 digits (01, 02, …) to match the files
+    actually written to disk (e.g. A_1_01.png, A_1_02.png).
     """
     artist_slug  = artist.replace(" ", "_")
     artwork_slug = artwork.replace(" ", "_")
     return [
-        str(root_output_dir / f"{artist_slug}_{artwork_slug}_{i}.png")
-        for i in range(images_per_prompt)
+        str(root_output_dir / f"{artist_slug}_{artwork_slug}_{i + 1:02d}.png")
+        for i in range(num_imgs)
     ]
 
 
@@ -156,7 +161,7 @@ def main() -> None:
         help="Root directory where generate_from_pt will write the generated images",
     )
     parser.add_argument(
-        "--images_per_prompt",
+        "--num_imgs",
         type=int,
         default=1,
         help="Number of generated images per prompt (default: 1). "
@@ -210,14 +215,14 @@ def main() -> None:
 
         prompt = build_prompt(artwork, artist)
         gen_paths = generated_paths_for(
-            artist, artwork, root_output_dir, args.images_per_prompt
+            artist, artwork, root_output_dir, args.num_imgs
         )
 
         prompts.append(prompt)
         mapping[str(img_path)] = gen_paths
 
         print(f"  → '{img_path.name}'  |  prompt: \"{prompt}\"")
-        if args.images_per_prompt == 1:
+        if args.num_imgs == 1:
             print(f"     generated: {gen_paths[0]}")
         else:
             for gp in gen_paths:
