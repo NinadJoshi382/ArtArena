@@ -13,7 +13,7 @@ Official repository for **SilentBrush**, a framework for evaluating the stylisti
 ## Teaser
 
 <!-- TEASER FIGURE PLACEHOLDER -->
-![Teaser Figure](figures/teaser.png)
+![Teaser Figure](figures/teaser1.pdf)
 
 ---
 
