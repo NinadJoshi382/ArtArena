@@ -30,6 +30,19 @@
 #       --top_save_root /path/to/candidates \
 #       --top_n 10
 
+'''  
+download the checkpoint.pt for CSD by running the below code on google colab
+
+!pip install gdown -q
+
+import gdown
+
+file_id = "1FX0xs8p-C7Ob-h5Y4cUhTeOepHzXv_46"
+output = "checkpoint.pt"
+
+gdown.download(f"https://drive.google.com/uc?id={file_id}", output, quiet=False)
+'''
+
 import contextlib
 import os
 import json
