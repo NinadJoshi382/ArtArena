@@ -1,5 +1,5 @@
 """
-prepare_prompts.py
+prep_ET.py
 
 Scans a dataset directory of images named <artwork>_<artist>.<ext>,
 builds a list of prompts ("<artwork> in the style of <artist>"),
@@ -7,7 +7,7 @@ saves them to a .pt file, and writes a JSON mapping of
     { original_path: [generated_path_sample_0, generated_path_sample_1, ...] }
 
 Usage:
-    python prepare_prompts.py \
+    python prep_ET.py \
         --dataset_dir   /path/to/dataset \
         --prompt_save   /path/to/prompts.pt \
         --mapping_json_save /path/to/mapping.json \
