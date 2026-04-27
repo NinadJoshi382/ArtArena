@@ -123,11 +123,9 @@ python MD_eval.py --metric clip \\
 If you find this work useful, please consider citing:
 
 ```bibtex
-@article{silentbrush2025,
-  title     = {SilentBrush: Probing Artistic Style Memorization in Text-to-Image Models},
-  author    = {},
-  journal   = {},
-  year      = {2025}
+@article{joshisilent,
+  title={The Silent Brush: Artistic Style Leakage in AI Art Generation},
+  author={Joshi, Ninad and Ranjan, Ashutosh and Srivastava, Vivek and Karande, Shirish}
 }
 ```
 
