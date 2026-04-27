@@ -46,12 +46,26 @@ python prep_ET.py \
 
 **Step 2 — Run inference:**
 ```bash
-python ET_infer.py
+  python ET_infer.py \
+      --model_name sd15 \
+      --prompts_pt /path/to/prompts.pt \
+      --root_output_dir /path/to/output \
+      --images_per_prompt 1 \
+      --num_inference_steps 25 \
+      --guidance_scale 7.5 \
+      --seed_base 42
 ```
 
 **Step 3 — Evaluate results:**
 ```bash
-python ET_eval.py
+python ET_eval.py \
+      --proximity_metric clip \
+      --mapping_json /path/to/mapping.json \
+      --output_csv /path/to/clip_scores.csv \
+      --top_save_root /path/to/candidates \
+      --orig_emb_out /path/to/original_clip_embs.pt \
+      --gen_emb_out /path/to/generated_clip_embs.pt \
+      --top_n 20
 ```
 
 <!-- IMITATION FIGURE PLACEHOLDER -->
@@ -61,14 +75,12 @@ python ET_eval.py
 
 ## Motif Duels
 
-Motif Duels form the second and more fine-grained stage of the pipeline. Here, the model is evaluated through structured **head-to-head visual competitions** between two roles:
+Motif Duels form the second and more fine-grained stage of the pipeline. Here, the model is evaluated through structured **pariwise artwork interactions** in the following two roles:
 
-- **Challenger** — the model is prompted to explicitly generate an image *in the style of* a target artist.
-- **Defender** — the same model is prompted with a generic, style-agnostic description of the same subject.
+- **Challenger** — artwork which contributes content cues via motifs in the compositon prompt.
+- **Defender** — artwork which contributes stylsitic cues via explicit mention of the artwork and artist in the compositon prompt.
 
-The duel asks: does the Challenger's output contain artist-specific visual motifs that the Defender's does not? If identifiable motifs persist in the Challenger's generations beyond what can be attributed to the subject matter alone, this constitutes evidence of style memorization.
-
-**Motif Extraction:** Motifs are extracted from reference artworks using **GPT-4o**, with the extraction prompt provided in full in the Appendix of the paper.
+**Motif Extraction:** Motifs are extracted from reference artworks using **GPT-4o**, with the extraction prompt provided in the Appendix of the paper.
 
 > 💡 **Note:** How to use each script, which arguments to pass, and a usage example are documented in the comments at the very top of each file.
 
