@@ -19,20 +19,11 @@ Official repository for **SilentBrush**, a framework for evaluating the stylisti
 
 ## Dataset Preparation
 
-Organize your dataset before running any pipeline scripts. For each artist–artwork pair, save all corresponding images in a dedicated folder following this naming convention:
+Organize your dataset before running any pipeline scripts. For each artist–artwork pair, save all corresponding images in a dataset folder following this naming convention for each image:
 
 ```
-<artwork>_<artist>/
+<artwork>_<artist>
 ```
-
-For example:
-```
-starry_night_vangogh/
-water_lilies_monet/
-the_scream_munch/
-```
-
-All images belonging to the same artwork–artist pair should reside within their respective folder. Ensure folder names are lowercase and use underscores in place of spaces.
 
 ---
 
