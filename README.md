@@ -35,7 +35,13 @@ Entry Trials form the first stage of the ArtArena pipeline. The goal is to ident
 
 **Step 1 — Prepare Entry Trial inputs:**
 ```bash
-python prep_ET.py
+python prep_ET.py \
+        --dataset_dir   /path/to/dataset \
+        --prompt_save   /path/to/prompts.pt \
+        --mapping_json_save /path/to/mapping.json \
+        --root_output_dir   /path/to/output \
+        [--images_per_prompt 1] \
+        [--name_split last]
 ```
 
 **Step 2 — Run inference:**
