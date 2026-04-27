@@ -69,7 +69,7 @@ python ET_eval.py \
 ```
 
 <!-- IMITATION FIGURE PLACEHOLDER -->
-![Imitation Figure](figures/imitation.png)
+![Imitation Figure](figures/Page 3.pdf)
 
 ---
 
@@ -114,7 +114,7 @@ python MD_eval.py --metric clip \\
 ```
 
 <!-- DUEL FIGURE PLACEHOLDER -->
-![Duel Figure](figures/duel.png)
+![Duel Figure](figures/SD_Sem.pdf)
 
 ---
 
