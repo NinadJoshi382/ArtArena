@@ -65,7 +65,7 @@ parser.add_argument(
     "--mapping_json",
     type=str,
     required=True,
-    help="Path to the JSON mapping file: {original_path: generated_path}"
+    help="Path to the JSON mapping file: {original_path: [generated_path, ...]}"
 )
 parser.add_argument(
     "--output_csv",
@@ -274,11 +274,6 @@ elif args.proximity_metric == "lpips":
     LPIPS_NORMALIZE_TO_MINUS1_1 = True     # LPIPS expects [-1, 1] inputs
     INTERP_MODE                = "bicubic" # interpolation when resizing orig to gen dims
 
-    # Optional: set this to a local .pth path for offline / air-gapped environments.
-    # The prepare_torchvision_cache_for_alexnet() helper will copy it into the
-    # torch hub checkpoints folder so lpips can find it without downloading.
-    # LOCAL_ALEXNET_WEIGHT_PATH = "/path/to/alexnet-owt-7be5be79.pth"
-
     to_tensor_01 = T.Compose([T.ToTensor()])  # float32 in [0,1], CxHxW
 
     def load_tensor_for_lpips(path: str, device: torch.device,
@@ -365,38 +360,77 @@ def has_valid_image_extension(path: str) -> bool:
     return ext.lower() in VALID_IMAGE_EXTS
 
 
-def read_and_validate_mapping(mapping_json_path: str) -> Dict[str, str]:
-    """Read mapping JSON and return only valid {original: generated} pairs."""
+def read_and_validate_mapping(mapping_json_path: str) -> Dict[str, List[str]]:
+    """
+    Read mapping JSON and return only valid pairs.
+
+    Accepted input format:
+        { original_path: [generated_path_0, generated_path_1, ...], ... }
+
+    Returns:
+        dict mapping each valid original path to its non-empty list of valid
+        generated paths.  Entries that are wholly invalid are skipped and
+        written to a log file next to the mapping JSON.
+    """
     with open(mapping_json_path, "r") as f:
         data = json.load(f)
 
     if not isinstance(data, dict):
-        raise ValueError("Mapping JSON must be a dict of {original: generated}.")
+        raise ValueError(
+            "Mapping JSON must be a dict of {original_path: [generated_path, ...]}."
+        )
 
-    valid = {}
+    valid: Dict[str, List[str]] = {}
     invalid_entries = []
-    for orig, gen in data.items():
-        orig_clean = sanitize_path(orig)
-        gen_clean  = sanitize_path(gen)
 
-        if not is_nonempty_str(orig_clean) or not is_nonempty_str(gen_clean):
-            invalid_entries.append((orig, gen, "empty_or_nonstring"))
+    for orig, gen_list in data.items():
+        orig_clean = sanitize_path(orig)
+
+        # --- validate the original path ---
+        if not is_nonempty_str(orig_clean):
+            invalid_entries.append((orig, gen_list, "empty_or_nonstring_original"))
             continue
 
-        if ENFORCE_IMAGE_EXTENSIONS:
-            if not has_valid_image_extension(orig_clean) or not has_valid_image_extension(gen_clean):
-                invalid_entries.append((orig_clean, gen_clean, "bad_extension"))
+        if ENFORCE_IMAGE_EXTENSIONS and not has_valid_image_extension(orig_clean):
+            invalid_entries.append((orig_clean, gen_list, "bad_extension_original"))
+            continue
+
+        # --- gen_list must be a non-empty list ---
+        if not isinstance(gen_list, list) or len(gen_list) == 0:
+            invalid_entries.append((orig_clean, gen_list, "generated_not_a_list_or_empty"))
+            continue
+
+        # --- validate each generated path inside the list ---
+        valid_gens: List[str] = []
+        for gen in gen_list:
+            gen_clean = sanitize_path(gen)
+            if not is_nonempty_str(gen_clean):
+                invalid_entries.append((orig_clean, gen, "empty_or_nonstring_generated"))
                 continue
+            if ENFORCE_IMAGE_EXTENSIONS and not has_valid_image_extension(gen_clean):
+                invalid_entries.append((orig_clean, gen_clean, "bad_extension_generated"))
+                continue
+            valid_gens.append(gen_clean)
 
-        valid[orig_clean] = gen_clean
+        if not valid_gens:
+            invalid_entries.append((orig_clean, gen_list, "no_valid_generated_paths"))
+            continue
 
-    print(f"[INFO] Mapping: total={len(data)}, valid={len(valid)}, invalid={len(invalid_entries)}")
+        valid[orig_clean] = valid_gens
+
+    print(
+        f"[INFO] Mapping: total={len(data)}, valid={len(valid)}, "
+        f"invalid_entries={len(invalid_entries)}"
+    )
     if invalid_entries:
-        log_path = os.path.join(os.path.dirname(mapping_json_path), "mapping_invalid_entries.log")
+        log_path = os.path.join(
+            os.path.dirname(mapping_json_path), "mapping_invalid_entries.log"
+        )
         with open(log_path, "w", encoding="utf-8") as lf:
             for o, g, reason in invalid_entries:
                 lf.write(f"[INVALID ({reason})]: original={repr(o)} generated={repr(g)}\n")
         print(f"[WARN] Invalid entries written to: {log_path}")
+
     return valid
 
 
@@ -436,7 +470,20 @@ def copy_with_rank_and_hash(src_path: str, dst_dir: str, rank: int) -> str:
     return target_path
 
 
-def save_top_pairs(results: List[Tuple[str, str, float]], top_root: str, top_n: int):
+def save_top_pairs(
+    results: List[Tuple[str, List[str], float]],
+    top_root: str,
+    top_n: int,
+):
+    """
+    Save the top-N original images and ALL of their associated generated images.
+
+    Directory layout::
+
+        top_root/
+          topN_original/   <- one copy of the original per entry
+          topN_generated/  <- all generated images for each entry
+    """
     if top_root is None:
         return
     gen_dir  = os.path.join(top_root, f"top{top_n}_generated")
@@ -444,13 +491,16 @@ def save_top_pairs(results: List[Tuple[str, str, float]], top_root: str, top_n: 
     os.makedirs(gen_dir,  exist_ok=True)
     os.makedirs(orig_dir, exist_ok=True)
     print(f"[INFO] Saving top-{top_n} pairs → generated: {gen_dir} | original: {orig_dir}")
-    for rank, (orig_path, gen_path, score) in enumerate(results[:top_n], start=1):
+    for rank, (orig_path, gen_paths, score) in enumerate(results[:top_n], start=1):
         try:
-            gen_dst  = copy_with_rank_and_hash(gen_path,  gen_dir,  rank)
             orig_dst = copy_with_rank_and_hash(orig_path, orig_dir, rank)
-            print(f"[TOP {rank:02d}] score={score:.6f}  gen: {gen_dst}  orig: {orig_dst}")
+            gen_dsts = [copy_with_rank_and_hash(gp, gen_dir, rank) for gp in gen_paths]
+            print(
+                f"[TOP {rank:02d}] avg_score={score:.6f}  "
+                f"orig: {orig_dst}  gen: {gen_dsts}"
+            )
         except Exception as e:
-            print(f"[ERROR] Failed copying pair rank={rank} ({orig_path}, {gen_path}): {e}")
+            print(f"[ERROR] Failed copying pair rank={rank} ({orig_path}): {e}")
 
 
 # -----------------------
@@ -466,7 +516,7 @@ def main():
 
     # Read mapping
     print(f"[INFO] Reading mapping JSON: {args.mapping_json}")
-    mapping = read_and_validate_mapping(args.mapping_json)
+    mapping: Dict[str, List[str]] = read_and_validate_mapping(args.mapping_json)
 
     # Resolve output paths
     os.makedirs(os.path.dirname(os.path.abspath(args.output_csv)), exist_ok=True)
@@ -485,7 +535,10 @@ def main():
         os.makedirs(os.path.dirname(os.path.abspath(gen_emb_out)),  exist_ok=True)
         print(f"[INFO] Embedding cache → original: {orig_emb_out} | generated: {gen_emb_out}")
     else:
-        print(f"[INFO] Embedding caching disabled for '{args.proximity_metric}' (tensors computed per-pair)")
+        print(
+            f"[INFO] Embedding caching disabled for '{args.proximity_metric}' "
+            "(tensors computed per-pair)"
+        )
 
     if args.top_save_root:
         os.makedirs(args.top_save_root, exist_ok=True)
@@ -493,69 +546,108 @@ def main():
 
     orig_embeddings: Dict[str, torch.Tensor] = {}
     gen_embeddings:  Dict[str, torch.Tensor] = {}
-    results: List[Tuple[str, str, float]]    = []
-    errors:  List[str]                       = []
+
+    # Each entry: (original_path, [generated_paths], averaged_score)
+    results: List[Tuple[str, List[str], float]] = []
+    errors:  List[str] = []
 
     total = len(mapping)
-    print(f"[INFO] Processing {total} valid pairs...")
+    print(f"[INFO] Processing {total} valid originals...")
 
     with torch.no_grad():
-        for idx, (orig_path, gen_path) in enumerate(mapping.items(), start=1):
-            if not is_nonempty_str(orig_path) or not is_nonempty_str(gen_path):
-                msg = f"Skipping invalid pair at idx={idx}"
+        for idx, (orig_path, gen_paths) in enumerate(mapping.items(), start=1):
+
+            # ---- validate original ----
+            if not is_nonempty_str(orig_path):
+                msg = f"Skipping invalid original path at idx={idx}"
                 print(f"[WARN] {msg}"); errors.append(msg); continue
 
             if not os.path.isfile(orig_path):
                 msg = f"Missing original file: {orig_path}"
                 print(f"[WARN] {msg}"); errors.append(msg); continue
 
-            if not os.path.isfile(gen_path):
-                msg = f"Missing generated file: {gen_path}"
-                print(f"[WARN] {msg}"); errors.append(msg); continue
-
+            # ---- embed the original once ----
             try:
                 if CACHE_EMBEDDINGS:
-                    # Load + cache to memory and disk (used by CLIP)
                     if orig_path not in orig_embeddings:
                         emb_o = load_embedding(model, processor, orig_path, device)
                         orig_embeddings[orig_path] = emb_o.detach().cpu()
                         torch.save(orig_embeddings, orig_emb_out)
-
-                    if gen_path not in gen_embeddings:
-                        emb_g = load_embedding(model, processor, gen_path, device)
-                        gen_embeddings[gen_path] = emb_g.detach().cpu()
-                        torch.save(gen_embeddings, gen_emb_out)
-
                     a = orig_embeddings[orig_path].to(device)
-                    b = gen_embeddings[gen_path].to(device)
                 else:
-                    # Load directly without caching (used by LPIPS - tensors are large)
                     a = load_embedding(model, processor, orig_path, device)
-                    b = load_embedding(model, processor, gen_path,  device)
-
-                score = compute_score(a, b, model)
-                results.append((orig_path, gen_path, score))
-
-                if idx % 50 == 0 or idx == total:
-                    print(f"[INFO] {idx}/{total} processed | last score={score:.6f}")
-
             except Exception as e:
-                msg = f"Error at pair ({orig_path}, {gen_path}): {e}"
-                print(f"[ERROR] {msg}"); errors.append(msg)
+                msg = f"Error embedding original ({orig_path}): {e}"
+                print(f"[ERROR] {msg}"); errors.append(msg); continue
 
-    # Sort: ascending for distance metrics (LPIPS), descending for similarity metrics (CLIP)
+            # ---- score against every generated image, then average ----
+            per_gen_scores: List[float] = []
+
+            for gen_path in gen_paths:
+                if not is_nonempty_str(gen_path):
+                    msg = f"Skipping empty generated path for original={orig_path}"
+                    print(f"[WARN] {msg}"); errors.append(msg); continue
+
+                if not os.path.isfile(gen_path):
+                    msg = f"Missing generated file: {gen_path} (original={orig_path})"
+                    print(f"[WARN] {msg}"); errors.append(msg); continue
+
+                try:
+                    if CACHE_EMBEDDINGS:
+                        if gen_path not in gen_embeddings:
+                            emb_g = load_embedding(model, processor, gen_path, device)
+                            gen_embeddings[gen_path] = emb_g.detach().cpu()
+                            torch.save(gen_embeddings, gen_emb_out)
+                        b = gen_embeddings[gen_path].to(device)
+                    else:
+                        b = load_embedding(model, processor, gen_path, device)
+
+                    s = compute_score(a, b, model)
+                    per_gen_scores.append(s)
+
+                except Exception as e:
+                    msg = f"Error scoring pair ({orig_path}, {gen_path}): {e}"
+                    print(f"[ERROR] {msg}"); errors.append(msg)
+
+            if not per_gen_scores:
+                msg = f"No valid generated scores for original={orig_path}; skipping."
+                print(f"[WARN] {msg}"); errors.append(msg); continue
+
+            # Average the individual scores → one row per original
+            avg_score = sum(per_gen_scores) / len(per_gen_scores)
+            results.append((orig_path, gen_paths, avg_score))
+
+            if idx % 50 == 0 or idx == total:
+                print(
+                    f"[INFO] {idx}/{total} processed | "
+                    f"n_gen={len(per_gen_scores)} | avg_score={avg_score:.6f}"
+                )
+
+    # Sort: ascending for distance metrics (LPIPS), descending for similarity metrics (CLIP/CSD)
     results.sort(key=lambda x: x[2], reverse=not SORT_ASCENDING)
 
-    # Write CSV
+    # Write CSV — one row per original; generated paths joined by "|"
     print("[INFO] Writing CSV...")
     with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["rank", "original_path", "generated_path", SCORE_COLUMN_NAME])
-        for rank, (orig_path, gen_path, score) in enumerate(results, start=1):
-            writer.writerow([rank, orig_path, gen_path, f"{score:.8f}"])
+        writer.writerow([
+            "rank", "original_path", "generated_paths",
+            "num_generated", SCORE_COLUMN_NAME
+        ])
+        for rank, (orig_path, gen_paths, avg_score) in enumerate(results, start=1):
+            writer.writerow([
+                rank,
+                orig_path,
+                "|".join(gen_paths),   # pipe-separated list of generated paths
+                len(gen_paths),
+                f"{avg_score:.8f}",
+            ])
 
     t1 = time.time()
-    print(f"[DONE] {len(results)} rows → {args.output_csv} | Elapsed: {t1-t0:.2f}s | Errors: {len(errors)}")
+    print(
+        f"[DONE] {len(results)} rows → {args.output_csv} | "
+        f"Elapsed: {t1-t0:.2f}s | Errors: {len(errors)}"
+    )
 
     if errors:
         err_log = os.path.splitext(args.output_csv)[0] + "_errors.log"
