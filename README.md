@@ -86,17 +86,31 @@ Motif Duels form the second and more fine-grained stage of the pipeline. Here, t
 
 **Step 1 — Prepare Motif Duel inputs:**
 ```bash
-python prep_MD.py
+python prep_MD.py \
+        --motif_json     /workspace/.../Motifs.json \
+        --top20_dir      /workspace/.../top20_original \
+        --MD_utils_dir   /workspace/.../MD_utils
 ```
 
 **Step 2 — Run inference:**
 ```bash
-python MD_infer.py
+  python MD_infer.py \
+      --model_name sd15 \
+      --out_json /path/to/clip_prompts_renamed.json \
+      --suffix_pt /path/to/suffix.pt \
+      --output_dir /path/to/output \
+      --pair_dict_save_path /path/to/save_dict.pt \
+      --images_per_prompt 1 \
+      --num_inference_steps 25 \
+      --guidance_scale 7.5
 ```
 
 **Step 3 — Evaluate results:**
 ```bash
-python MD_eval.py
+python MD_eval.py --metric clip \\
+        --t1_path /path/to/Sets_prompt_dir_dict_learning.pt \\
+        --artwork_map_path /path/to/simple_maps.pt \\
+        --output_dir /path/to/output
 ```
 
 <!-- DUEL FIGURE PLACEHOLDER -->
