@@ -1,6 +1,6 @@
 # ArtArena
 
-Official repository for **SilentBrush**, a framework for evaluating the memorization and imitation of artistic styles in text-to-image generative models.
+Official repository for **SilentBrush**, a framework for evaluating the stylistic influence of artistic styles in text-to-image generative models.
 
 ---
 
