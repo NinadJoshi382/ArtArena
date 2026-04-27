@@ -1,3 +1,16 @@
+'''  
+download the checkpoint.pt for CSD by running the below code on google colab
+
+!pip install gdown -q
+
+import gdown
+
+file_id = "1FX0xs8p-C7Ob-h5Y4cUhTeOepHzXv_46"
+output = "checkpoint.pt"
+
+gdown.download(f"https://drive.google.com/uc?id={file_id}", output, quiet=False)
+'''
+
 # Example runs:
 #
 #   CLIP:
@@ -29,19 +42,6 @@
 #       --output_csv /path/to/lpips_scores.csv \
 #       --top_save_root /path/to/candidates \
 #       --top_n 10
-
-'''  
-download the checkpoint.pt for CSD by running the below code on google colab
-
-!pip install gdown -q
-
-import gdown
-
-file_id = "1FX0xs8p-C7Ob-h5Y4cUhTeOepHzXv_46"
-output = "checkpoint.pt"
-
-gdown.download(f"https://drive.google.com/uc?id={file_id}", output, quiet=False)
-'''
 
 import contextlib
 import os
@@ -272,9 +272,20 @@ elif args.proximity_metric == "csd":
         print(f"[INFO] Created missing {_init_file} to enable package-relative imports.")
 
     # Import model.py as part of the package — relative imports now resolve correctly
-    _csd_model_mod     = importlib.import_module(f"{_csd_pkg_name}.model")
-    CSD_CLIP           = _csd_model_mod.CSD_CLIP
-    convert_state_dict = _csd_model_mod.convert_state_dict
+    _csd_model_mod = importlib.import_module(f"{_csd_pkg_name}.model")
+    CSD_CLIP       = _csd_model_mod.CSD_CLIP
+
+    # convert_state_dict location varies by CSD version:
+    #   - some builds export it from model.py
+    #   - others keep it in utils.py
+    # Try model.py first, then fall back to utils.py.
+    if hasattr(_csd_model_mod, "convert_state_dict"):
+        convert_state_dict = _csd_model_mod.convert_state_dict
+        print("[INFO] CSD: convert_state_dict loaded from model.py")
+    else:
+        _csd_utils_mod     = importlib.import_module(f"{_csd_pkg_name}.utils")
+        convert_state_dict = _csd_utils_mod.convert_state_dict
+        print("[INFO] CSD: convert_state_dict loaded from utils.py")
 
     USE_COSINE_SIMILARITY = args.use_cosine_similarity
 
