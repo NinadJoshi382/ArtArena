@@ -1,5 +1,5 @@
 """
-prepare_MD_utils.py
+prep_MD.py
 
 Prepares the three utility files needed for Motif Duels:
 
@@ -9,7 +9,7 @@ Prepares the three utility files needed for Motif Duels:
         clean_maps.pt   – {"A1": "<artwork> by <artist>", ...}
 
 Usage:
-    python prepare_MD_utils.py \
+    python prep_MD.py \
         --motif_json     /workspace/.../Motifs.json \
         --top20_dir      /workspace/.../top20_original \
         --MD_utils_dir   /workspace/.../MD_utils
