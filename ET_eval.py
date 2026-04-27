@@ -13,6 +13,7 @@
 #   CSD:
 #   python ET_eval.py \
 #       --proximity_metric csd \
+#       --csd_repo_dir /path/to/CSD_repo \
 #       --model_path /path/to/checkpoint.pth \
 #       --mapping_json /path/to/mapping.json \
 #       --output_csv /path/to/csd_scores.csv \
@@ -29,6 +30,7 @@
 #       --top_save_root /path/to/candidates \
 #       --top_n 10
 
+import contextlib
 import os
 import json
 import csv
@@ -121,6 +123,16 @@ parser.add_argument(
 
 # CSD-specific args
 parser.add_argument(
+    "--csd_repo_dir",
+    type=str,
+    default=None,
+    help=(
+        "[CSD only] Path to the cloned CSD repository root — the directory that "
+        "contains model.py and utils.py.  The script registers this folder as a "
+        "Python package so that the relative imports inside model.py resolve correctly."
+    ),
+)
+parser.add_argument(
     "--model_path",
     type=str,
     default=None,
@@ -141,6 +153,21 @@ USE_AMP                    = not args.no_amp
 ENFORCE_IMAGE_EXTENSIONS   = not args.no_enforce_image_extensions
 COPY_WITH_RANK_PREFIX      = args.copy_with_rank_prefix
 
+
+# -----------------------
+# Shared AMP context helper
+# -----------------------
+def amp_context(device: torch.device):
+    """
+    Return the appropriate autocast context manager.
+    Uses the non-deprecated torch.amp.autocast API (torch >= 1.10).
+    Falls back to a no-op context when AMP is disabled or device is CPU.
+    """
+    if USE_AMP and device.type == "cuda":
+        return torch.amp.autocast("cuda", dtype=torch.float16)
+    return contextlib.nullcontext()
+
+
 # -----------------------
 # Metric Initialisation
 # -----------------------
@@ -157,22 +184,29 @@ if args.proximity_metric == "clip":
         return model, processor
 
     def load_embedding(model, processor, image_path: str, device: torch.device) -> torch.Tensor:
-        """Load image and return L2-normalised CLIP embedding, shape [1, D]."""
+        """
+        Load image and return an L2-normalised CLIP image embedding, shape [1, D].
+
+        Calls vision_model + visual_projection explicitly instead of
+        get_image_features() to avoid a version-dependent return-type issue:
+        newer transformers builds can return a BaseModelOutputWithPooling object
+        rather than a plain tensor from get_image_features(), causing the
+        subsequent .norm() call to fail with an AttributeError.
+        """
         with Image.open(image_path) as im:
             im = im.convert("RGB")
         inputs = processor(images=im, return_tensors="pt")
         pixel_values = inputs["pixel_values"].to(device)
 
-        use_amp = USE_AMP and device.type == "cuda"
-        with torch.no_grad():
-            if use_amp:
-                with torch.cuda.amp.autocast(dtype=torch.float16):
-                    img_feat = model.get_image_features(pixel_values=pixel_values)
-            else:
-                img_feat = model.get_image_features(pixel_values=pixel_values)
+        with torch.no_grad(), amp_context(device):
+            # vision_model always returns BaseModelOutputWithPooling;
+            # pooler_output is the [CLS] token projected to hidden_size.
+            vision_outputs = model.vision_model(pixel_values=pixel_values)
+            pooled_output  = vision_outputs.pooler_output           # [1, hidden_size]
+            img_feat       = model.visual_projection(pooled_output)  # [1, projection_dim]
 
         img_feat = img_feat / (img_feat.norm(p=2, dim=-1, keepdim=True) + 1e-8)
-        return img_feat
+        return img_feat  # [1, D]
 
     def compute_score(a: torch.Tensor, b: torch.Tensor, model=None) -> float:
         """Cosine similarity between two L2-normalised CLIP embeddings."""
@@ -185,145 +219,147 @@ if args.proximity_metric == "clip":
     CACHE_EMBEDDINGS   = True    # CLIP embeddings are small [1,D]; cache to disk
 
 elif args.proximity_metric == "csd":
+    # -----------------------------------------------------------------------
+    # CSD imports — the repo uses relative imports (from .utils import …),
+    # so we must load it as a proper Python *package* rather than a bare
+    # module.  Strategy:
+    #   1. Resolve the absolute path of the repo directory (--csd_repo_dir).
+    #   2. Insert its *parent* directory into sys.path.
+    #   3. Touch an __init__.py inside the repo dir (if absent) so Python
+    #      recognises it as a package.
+    #   4. Import via importlib using the package-qualified name, e.g.
+    #      "CSD.model" — this makes all relative imports inside model.py
+    #      resolve correctly against the package.
+    # -----------------------------------------------------------------------
+    import sys
+    import importlib
     from torchvision import transforms
     import torchvision.transforms.functional as TF
 
-    # CSD model must be available in your Python path:
-    #   git clone https://github.com/learn2phoenix/CSD && pip install -e CSD/
-    from model import CSD_CLIP, convert_state_dict
-
+    if args.csd_repo_dir is None:
+        raise ValueError(
+            "--csd_repo_dir is required for --proximity_metric csd.\n"
+            "Pass the path to the cloned CSD repository root that contains model.py."
+        )
     if args.model_path is None:
         raise ValueError("--model_path is required for --proximity_metric csd")
 
-    # Whether to L2-normalise embeddings before dot product (cosine sim)
-    # Controlled by --use_cosine_similarity flag (default: raw dot product)
+    _csd_repo_abs = os.path.abspath(args.csd_repo_dir)
+    _csd_parent   = os.path.dirname(_csd_repo_abs)
+    _csd_pkg_name = os.path.basename(_csd_repo_abs)
+
+    # Make the repo importable as a package
+    if _csd_parent not in sys.path:
+        sys.path.insert(0, _csd_parent)
+
+    # Create __init__.py if missing so Python treats the folder as a package
+    _init_file = os.path.join(_csd_repo_abs, "__init__.py")
+    if not os.path.exists(_init_file):
+        open(_init_file, "w").close()
+        print(f"[INFO] Created missing {_init_file} to enable package-relative imports.")
+
+    # Import model.py as part of the package — relative imports now resolve correctly
+    _csd_model_mod     = importlib.import_module(f"{_csd_pkg_name}.model")
+    CSD_CLIP           = _csd_model_mod.CSD_CLIP
+    convert_state_dict = _csd_model_mod.convert_state_dict
+
     USE_COSINE_SIMILARITY = args.use_cosine_similarity
 
     def init_metric_model(device: torch.device):
         """Initialise CSD_CLIP model and its preprocessing pipeline."""
-        model = CSD_CLIP("vit_large", "default")
-
-        # Load checkpoint from the path provided via --model_path
+        model      = CSD_CLIP("vit_large", "default")
         checkpoint = torch.load(args.model_path, map_location="cpu")
         state_dict = convert_state_dict(checkpoint["model_state_dict"])
         model.load_state_dict(state_dict, strict=False)
-
         model = model.to(device)
         model.eval()
 
-        # CSD-standard normalisation and transforms
         normalize = transforms.Normalize(
             (0.48145466, 0.4578275,  0.40821073),
-            (0.26862954, 0.26130258, 0.27577711)
+            (0.26862954, 0.26130258, 0.27577711),
         )
         preprocess = transforms.Compose([
-            transforms.Resize(size=224,
-                              interpolation=TF.InterpolationMode.BICUBIC),
+            transforms.Resize(size=224, interpolation=TF.InterpolationMode.BICUBIC),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             normalize,
         ])
 
-        print(f"[INFO] CSD model loaded from '{args.model_path}' | "
-              f"cosine_sim={USE_COSINE_SIMILARITY}")
+        print(
+            f"[INFO] CSD model loaded from '{args.model_path}' | "
+            f"cosine_sim={USE_COSINE_SIMILARITY}"
+        )
         return model, preprocess
 
     def load_embedding(model, processor, image_path: str,
                        device: torch.device) -> torch.Tensor:
-        """
-        Load image, apply CSD preprocess pipeline, run model,
-        return style embedding tensor [1, D] (kept on device).
-        """
+        """Return CSD style embedding [1, D]."""
         with Image.open(image_path) as im:
             im = im.convert("RGB")
         img_tensor = processor(im).unsqueeze(0).to(device)
-
-        use_amp = USE_AMP and device.type == "cuda"
-        if use_amp:
-            with torch.cuda.amp.autocast(dtype=torch.float16):
-                style_output = model(img_tensor)   # (1, D)
-        else:
-            style_output = model(img_tensor)       # (1, D)
-        return style_output   # keep on device
+        with amp_context(device):
+            style_output = model(img_tensor)   # (1, D)
+        return style_output
 
     def compute_score(a: torch.Tensor, b: torch.Tensor, model=None) -> float:
         """
-        CSD similarity between two style embeddings.
-        - Raw dot product by default (USE_COSINE_SIMILARITY=False).
-        - L2-normalised cosine similarity if USE_COSINE_SIMILARITY=True.
-        Returns a Python float (higher = more similar).
+        CSD similarity — raw dot product by default;
+        cosine similarity when --use_cosine_similarity is set.
         """
         if USE_COSINE_SIMILARITY:
             eps = 1e-8
             a = a / (a.norm(dim=1, keepdim=True) + eps)
             b = b / (b.norm(dim=1, keepdim=True) + eps)
-        sim = a @ b.T   # (1, 1)
-        return float(sim.item())
+        return float((a @ b.T).item())
 
     SCORE_COLUMN_NAME  = "csd_score"
-    SORT_ASCENDING     = False   # higher CSD score = more similar
-    CACHE_EMBEDDINGS   = True    # CSD embeddings are small [1,D]; cache to disk
+    SORT_ASCENDING     = False
+    CACHE_EMBEDDINGS   = True
 
 elif args.proximity_metric == "lpips":
     import torch.nn.functional as F
     import torchvision.transforms as T
     from PIL import ImageOps
 
-    # ---- LPIPS config ----
-    LPIPS_NET                  = "alex"    # "alex" | "vgg" | "squeeze"
-    LPIPS_NORMALIZE_TO_MINUS1_1 = True     # LPIPS expects [-1, 1] inputs
-    INTERP_MODE                = "bicubic" # interpolation when resizing orig to gen dims
+    LPIPS_NET                   = "alex"
+    LPIPS_NORMALIZE_TO_MINUS1_1 = True
+    INTERP_MODE                 = "bicubic"
 
-    to_tensor_01 = T.Compose([T.ToTensor()])  # float32 in [0,1], CxHxW
+    to_tensor_01 = T.Compose([T.ToTensor()])
 
     def load_tensor_for_lpips(path: str, device: torch.device,
                               target_size: Tuple[int, int] = None) -> torch.Tensor:
-        """
-        Load image as a tensor [1,3,H,W] normalised for LPIPS.
-        Optionally resizes to target_size=(H_target, W_target) via bicubic interpolation.
-        """
         with Image.open(path) as im:
             im = ImageOps.exif_transpose(im).convert("RGB")
-        x = to_tensor_01(im)               # [3,H,W], float32 in [0,1]
+        x = to_tensor_01(im)
         if LPIPS_NORMALIZE_TO_MINUS1_1:
-            x = x * 2.0 - 1.0             # -> [-1,1]
-        x = x.unsqueeze(0).to(device)     # [1,3,H,W]
+            x = x * 2.0 - 1.0
+        x = x.unsqueeze(0).to(device)
         if target_size is not None:
             h_t, w_t = target_size
             try:
                 x = F.interpolate(x, size=(h_t, w_t), mode=INTERP_MODE,
-                                  align_corners=False, antialias=True)   # torch>=2.0
+                                  align_corners=False, antialias=True)
             except TypeError:
                 x = F.interpolate(x, size=(h_t, w_t), mode=INTERP_MODE,
-                                  align_corners=False)                   # fallback
+                                  align_corners=False)
         return x
 
     def init_metric_model(device: torch.device):
-        """Initialise the LPIPS loss network."""
         try:
             import lpips
         except ImportError:
             raise RuntimeError("lpips not installed. Run: pip install lpips")
-        loss_fn = lpips.LPIPS(net=LPIPS_NET)
-        loss_fn = loss_fn.to(device)
+        loss_fn = lpips.LPIPS(net=LPIPS_NET).to(device)
         loss_fn.eval()
         print(f"[INFO] LPIPS model (net={LPIPS_NET}) loaded successfully!")
-        return loss_fn, None   # no processor for LPIPS
+        return loss_fn, None
 
     def load_embedding(model, processor, image_path: str,
                        device: torch.device) -> torch.Tensor:
-        """
-        For LPIPS 'embedding' = the raw image tensor [1,3,H,W].
-        Actual resizing to match the paired image is done inside compute_score.
-        """
         return load_tensor_for_lpips(image_path, device, target_size=None)
 
     def compute_score(a: torch.Tensor, b: torch.Tensor, model) -> float:
-        """
-        LPIPS distance between tensors a (orig) and b (gen).
-        Resizes a to match b's spatial dimensions before scoring.
-        Lower score = more perceptually similar.
-        """
         if a.shape[2:] != b.shape[2:]:
             h_t, w_t = b.shape[2], b.shape[3]
             try:
@@ -332,12 +368,12 @@ elif args.proximity_metric == "lpips":
             except TypeError:
                 a = F.interpolate(a, size=(h_t, w_t), mode=INTERP_MODE,
                                   align_corners=False)
-        d = model(a, b)                    # lpips_fn(x, y) -> scalar tensor
-        return float(d.item())
+        return float(model(a, b).item())
 
     SCORE_COLUMN_NAME  = "lpips_distance"
-    SORT_ASCENDING     = True    # lower LPIPS distance = better (ascending sort)
-    CACHE_EMBEDDINGS   = False   # LPIPS tensors are full [1,3,H,W]; skip disk cache
+    SORT_ASCENDING     = True
+    CACHE_EMBEDDINGS   = False
+
 
 # -----------------------
 # Utilities
@@ -358,6 +394,27 @@ def has_valid_image_extension(path: str) -> bool:
         return True
     _, ext = os.path.splitext(path)
     return ext.lower() in VALID_IMAGE_EXTS
+
+
+def diagnose_missing_file(path: str) -> str:
+    """
+    When a file is not found, inspect its parent directory and return a short
+    diagnostic string listing what IS there.  This helps quickly pinpoint path
+    mismatches (wrong folder, wrong extension, wrong naming convention, etc.)
+    without having to manually ls the directory.
+    """
+    parent = os.path.dirname(path)
+    if not os.path.isdir(parent):
+        return f"  ↳ Parent directory does not exist: {parent}"
+    entries = sorted(os.listdir(parent))
+    if not entries:
+        return f"  ↳ Parent directory exists but is EMPTY: {parent}"
+    sample = entries[:10]
+    suffix = f"  … and {len(entries) - 10} more" if len(entries) > 10 else ""
+    return (
+        f"  ↳ Parent dir : {parent}\n"
+        f"  ↳ Contents   : {sample}{suffix}"
+    )
 
 
 def read_and_validate_mapping(mapping_json_path: str) -> Dict[str, List[str]]:
@@ -386,7 +443,6 @@ def read_and_validate_mapping(mapping_json_path: str) -> Dict[str, List[str]]:
     for orig, gen_list in data.items():
         orig_clean = sanitize_path(orig)
 
-        # --- validate the original path ---
         if not is_nonempty_str(orig_clean):
             invalid_entries.append((orig, gen_list, "empty_or_nonstring_original"))
             continue
@@ -395,12 +451,10 @@ def read_and_validate_mapping(mapping_json_path: str) -> Dict[str, List[str]]:
             invalid_entries.append((orig_clean, gen_list, "bad_extension_original"))
             continue
 
-        # --- gen_list must be a non-empty list ---
         if not isinstance(gen_list, list) or len(gen_list) == 0:
             invalid_entries.append((orig_clean, gen_list, "generated_not_a_list_or_empty"))
             continue
 
-        # --- validate each generated path inside the list ---
         valid_gens: List[str] = []
         for gen in gen_list:
             gen_clean = sanitize_path(gen)
@@ -435,11 +489,10 @@ def read_and_validate_mapping(mapping_json_path: str) -> Dict[str, List[str]]:
 
 
 def auto_embedding_paths(mapping_json_path: str, metric: str) -> Tuple[str, str]:
-    """Derive default embedding save paths next to the mapping JSON."""
-    base_dir   = os.path.dirname(mapping_json_path)
-    base_name  = os.path.splitext(os.path.basename(mapping_json_path))[0].replace("_mapping", "")
-    orig_out   = os.path.join(base_dir, f"{base_name}_original_{metric}_embs.pt")
-    gen_out    = os.path.join(base_dir, f"{base_name}_generated_{metric}_embs.pt")
+    base_dir  = os.path.dirname(mapping_json_path)
+    base_name = os.path.splitext(os.path.basename(mapping_json_path))[0].replace("_mapping", "")
+    orig_out  = os.path.join(base_dir, f"{base_name}_original_{metric}_embs.pt")
+    gen_out   = os.path.join(base_dir, f"{base_name}_generated_{metric}_embs.pt")
     return orig_out, gen_out
 
 
@@ -462,8 +515,8 @@ def unique_target_path(dst_dir: str, base_name: str) -> str:
 
 def copy_with_rank_and_hash(src_path: str, dst_dir: str, rank: int) -> str:
     os.makedirs(dst_dir, exist_ok=True)
-    base = os.path.basename(src_path)
-    h    = short_hash(src_path)
+    base        = os.path.basename(src_path)
+    h           = short_hash(src_path)
     ranked_name = f"[rank:{rank:02d}]__{h}__{base}" if COPY_WITH_RANK_PREFIX else base
     target_path = unique_target_path(dst_dir, ranked_name)
     shutil.copy2(src_path, target_path)
@@ -475,15 +528,6 @@ def save_top_pairs(
     top_root: str,
     top_n: int,
 ):
-    """
-    Save the top-N original images and ALL of their associated generated images.
-
-    Directory layout::
-
-        top_root/
-          topN_original/   <- one copy of the original per entry
-          topN_generated/  <- all generated images for each entry
-    """
     if top_root is None:
         return
     gen_dir  = os.path.join(top_root, f"top{top_n}_generated")
@@ -511,14 +555,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Device: {device} | Metric: {args.proximity_metric} | AMP: {USE_AMP}")
 
-    # Initialise chosen metric model
     model, processor = init_metric_model(device)
 
-    # Read mapping
     print(f"[INFO] Reading mapping JSON: {args.mapping_json}")
     mapping: Dict[str, List[str]] = read_and_validate_mapping(args.mapping_json)
 
-    # Resolve output paths
     os.makedirs(os.path.dirname(os.path.abspath(args.output_csv)), exist_ok=True)
     print(f"[INFO] Output CSV: {args.output_csv}")
 
@@ -546,8 +587,6 @@ def main():
 
     orig_embeddings: Dict[str, torch.Tensor] = {}
     gen_embeddings:  Dict[str, torch.Tensor] = {}
-
-    # Each entry: (original_path, [generated_paths], averaged_score)
     results: List[Tuple[str, List[str], float]] = []
     errors:  List[str] = []
 
@@ -563,7 +602,8 @@ def main():
                 print(f"[WARN] {msg}"); errors.append(msg); continue
 
             if not os.path.isfile(orig_path):
-                msg = f"Missing original file: {orig_path}"
+                diag = diagnose_missing_file(orig_path)
+                msg  = f"Missing original file: {orig_path}\n{diag}"
                 print(f"[WARN] {msg}"); errors.append(msg); continue
 
             # ---- embed the original once ----
@@ -589,7 +629,8 @@ def main():
                     print(f"[WARN] {msg}"); errors.append(msg); continue
 
                 if not os.path.isfile(gen_path):
-                    msg = f"Missing generated file: {gen_path} (original={orig_path})"
+                    diag = diagnose_missing_file(gen_path)
+                    msg  = f"Missing generated file: {gen_path} (original={orig_path})\n{diag}"
                     print(f"[WARN] {msg}"); errors.append(msg); continue
 
                 try:
@@ -613,7 +654,6 @@ def main():
                 msg = f"No valid generated scores for original={orig_path}; skipping."
                 print(f"[WARN] {msg}"); errors.append(msg); continue
 
-            # Average the individual scores → one row per original
             avg_score = sum(per_gen_scores) / len(per_gen_scores)
             results.append((orig_path, gen_paths, avg_score))
 
@@ -623,7 +663,7 @@ def main():
                     f"n_gen={len(per_gen_scores)} | avg_score={avg_score:.6f}"
                 )
 
-    # Sort: ascending for distance metrics (LPIPS), descending for similarity metrics (CLIP/CSD)
+    # Sort: ascending for distance metrics (LPIPS), descending for similarity (CLIP/CSD)
     results.sort(key=lambda x: x[2], reverse=not SORT_ASCENDING)
 
     # Write CSV — one row per original; generated paths joined by "|"
@@ -632,13 +672,13 @@ def main():
         writer = csv.writer(f)
         writer.writerow([
             "rank", "original_path", "generated_paths",
-            "num_generated", SCORE_COLUMN_NAME
+            "num_generated", SCORE_COLUMN_NAME,
         ])
         for rank, (orig_path, gen_paths, avg_score) in enumerate(results, start=1):
             writer.writerow([
                 rank,
                 orig_path,
-                "|".join(gen_paths),   # pipe-separated list of generated paths
+                "|".join(gen_paths),
                 len(gen_paths),
                 f"{avg_score:.8f}",
             ])
