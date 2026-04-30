@@ -220,9 +220,10 @@ elif args.proximity_metric == "csd":
 
     # Import as a package to support relative imports inside model.py / utils.py
     import importlib
-    csd_model_mod = importlib.import_module(f"{csd_pkg}.model")
-    CSD_CLIP            = csd_model_mod.CSD_CLIP
-    convert_state_dict  = csd_model_mod.convert_state_dict
+    csd_model_mod  = importlib.import_module(f"{csd_pkg}.model")
+    csd_utils_mod  = importlib.import_module(f"{csd_pkg}.utils")
+    CSD_CLIP           = csd_model_mod.CSD_CLIP
+    convert_state_dict = csd_utils_mod.convert_state_dict
 
     # Whether to L2-normalise embeddings before dot product (cosine sim)
     # Controlled by --use_cosine_similarity flag (default: raw dot product)
