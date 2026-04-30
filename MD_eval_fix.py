@@ -105,6 +105,23 @@ def parse_args() -> argparse.Namespace:
         help="Root directory where per-contender CSVs will be saved.",
     )
 
+    # ---- Tournament rules ----
+    tournament_group = parser.add_argument_group("Tournament rules")
+    tournament_group.add_argument(
+        "--num_rounds",
+        type=int,
+        default=5,
+        help="Maximum number of rounds per match (default: 5). "
+             "If fewer entries exist for a match, all available entries are used.",
+    )
+    tournament_group.add_argument(
+        "--win_threshold",
+        type=int,
+        default=3,
+        help="Contender wins the match if their round win count exceeds this value "
+             "(default: 3, i.e. win_count > 3 out of 5 rounds).",
+    )
+
     # ---- CLIP-specific args ----
     clip_group = parser.add_argument_group("CLIP options")
     clip_group.add_argument(
@@ -496,7 +513,7 @@ def run_tournament(args: argparse.Namespace) -> None:
             round_rows_temp  = []
             round_idx        = 0
 
-            for entry in entries:
+            for entry in entries[:args.num_rounds]:
                 if not (isinstance(entry, (list, tuple)) and len(entry) >= 2):
                     print(f"[WARN] Malformed entry for match {match_key}: {entry}; "
                           "skipping round.")
@@ -562,7 +579,7 @@ def run_tournament(args: argparse.Namespace) -> None:
             total_rounds = round_idx
             match_winner = (
                 "no_decision" if total_rounds == 0
-                else ("contender" if win_count > 3 else "opponent")
+                else ("contender" if win_count > args.win_threshold else "opponent")
             )
 
             for r in round_rows_temp:
