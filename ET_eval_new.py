@@ -21,6 +21,7 @@
 #   python compute_proximity_scores.py \
 #       --proximity_metric csd \
 #       --model_path /path/to/checkpoint.pth \
+#       --csd_repo_dir /content/ArtArena/CSD \
 #       --mapping_json /path/to/mapping.json \
 #       --output_csv /path/to/csd_scores.csv \
 #       --top_save_root /path/to/candidates \
@@ -134,6 +135,13 @@ parser.add_argument(
     help="[CSD only] Path to the CSD model checkpoint .pth file"
 )
 parser.add_argument(
+    "--csd_repo_dir",
+    type=str,
+    default=None,
+    help="[CSD only] Path to the cloned CSD repo directory containing model.py and utils.py "
+         "(e.g. /content/ArtArena/CSD). Added to sys.path at runtime."
+)
+parser.add_argument(
     "--use_cosine_similarity",
     action="store_true",
     default=False,
@@ -192,15 +200,23 @@ if args.proximity_metric == "clip":
     CACHE_EMBEDDINGS   = True    # CLIP embeddings are small [1,D]; cache to disk
 
 elif args.proximity_metric == "csd":
+    import sys
     from torchvision import transforms
     import torchvision.transforms.functional as TF
+
+    if args.model_path is None:
+        raise ValueError("--model_path is required for --proximity_metric csd")
+
+    # Add CSD repo to sys.path so model.py and utils.py can be imported
+    if args.csd_repo_dir is not None:
+        sys.path.insert(0, args.csd_repo_dir)
+        print(f"[INFO] CSD repo dir added to sys.path: {args.csd_repo_dir}")
+    else:
+        print("[WARN] --csd_repo_dir not set. Assuming model.py and utils.py are already on sys.path.")
 
     # CSD model must be available in your Python path:
     #   git clone https://github.com/learn2phoenix/CSD && pip install -e CSD/
     from model import CSD_CLIP, convert_state_dict
-
-    if args.model_path is None:
-        raise ValueError("--model_path is required for --proximity_metric csd")
 
     # Whether to L2-normalise embeddings before dot product (cosine sim)
     # Controlled by --use_cosine_similarity flag (default: raw dot product)
