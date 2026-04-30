@@ -207,16 +207,22 @@ elif args.proximity_metric == "csd":
     if args.model_path is None:
         raise ValueError("--model_path is required for --proximity_metric csd")
 
-    # Add CSD repo to sys.path so model.py and utils.py can be imported
+    # Add the *parent* of the CSD repo to sys.path so it can be imported
+    # as a package (model.py uses relative imports like `from .utils import ...`)
     if args.csd_repo_dir is not None:
-        sys.path.insert(0, args.csd_repo_dir)
-        print(f"[INFO] CSD repo dir added to sys.path: {args.csd_repo_dir}")
+        csd_parent = str(Path(args.csd_repo_dir).resolve().parent)
+        csd_pkg    = Path(args.csd_repo_dir).resolve().name   # e.g. "CSD"
+        sys.path.insert(0, csd_parent)
+        print(f"[INFO] CSD parent dir added to sys.path: {csd_parent} (package name: '{csd_pkg}')")
     else:
-        print("[WARN] --csd_repo_dir not set. Assuming model.py and utils.py are already on sys.path.")
+        csd_pkg = "CSD"
+        print("[WARN] --csd_repo_dir not set. Assuming CSD package is already on sys.path.")
 
-    # CSD model must be available in your Python path:
-    #   git clone https://github.com/learn2phoenix/CSD && pip install -e CSD/
-    from model import CSD_CLIP, convert_state_dict
+    # Import as a package to support relative imports inside model.py / utils.py
+    import importlib
+    csd_model_mod = importlib.import_module(f"{csd_pkg}.model")
+    CSD_CLIP            = csd_model_mod.CSD_CLIP
+    convert_state_dict  = csd_model_mod.convert_state_dict
 
     # Whether to L2-normalise embeddings before dot product (cosine sim)
     # Controlled by --use_cosine_similarity flag (default: raw dot product)
