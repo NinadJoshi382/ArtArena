@@ -262,7 +262,8 @@ elif args.proximity_metric == "csd":
                        device: torch.device) -> torch.Tensor:
         """
         Load image, apply CSD preprocess pipeline, run model,
-        return style embedding tensor [1, D] (kept on device).
+        and return the STYLE embedding tensor [1, D] (kept on device).
+        CSD_CLIP.forward() returns (content_output, style_output) — we take [1].
         """
         with Image.open(image_path) as im:
             im = im.convert("RGB")
@@ -270,11 +271,14 @@ elif args.proximity_metric == "csd":
 
         use_amp = USE_AMP and device.type == "cuda"
         if use_amp:
-            with torch.cuda.amp.autocast(dtype=torch.float16):
-                style_output = model(img_tensor)   # (1, D)
+            with torch.amp.autocast("cuda", dtype=torch.float16):
+                output = model(img_tensor)
         else:
-            style_output = model(img_tensor)       # (1, D)
-        return style_output   # keep on device
+            output = model(img_tensor)
+
+        # CSD_CLIP returns (content_output, style_output)
+        style_output = output[1] if isinstance(output, (tuple, list)) else output
+        return style_output   # [1, D], kept on device
 
     def compute_score(a: torch.Tensor, b: torch.Tensor, model=None) -> float:
         """
