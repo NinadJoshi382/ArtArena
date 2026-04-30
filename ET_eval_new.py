@@ -210,8 +210,8 @@ elif args.proximity_metric == "csd":
     # Add the *parent* of the CSD repo to sys.path so it can be imported
     # as a package (model.py uses relative imports like `from .utils import ...`)
     if args.csd_repo_dir is not None:
-        csd_parent = str(Path(args.csd_repo_dir).resolve().parent)
-        csd_pkg    = Path(args.csd_repo_dir).resolve().name   # e.g. "CSD"
+        csd_parent = os.path.dirname(os.path.abspath(args.csd_repo_dir))
+        csd_pkg    = os.path.basename(os.path.abspath(args.csd_repo_dir))  # e.g. "CSD"
         sys.path.insert(0, csd_parent)
         print(f"[INFO] CSD parent dir added to sys.path: {csd_parent} (package name: '{csd_pkg}')")
     else:
