@@ -396,38 +396,70 @@ def has_valid_image_extension(path: str) -> bool:
 
 
 def read_and_validate_mapping(mapping_json_path: str) -> Dict[str, str]:
-    """Read mapping JSON and return only valid {original: generated} pairs."""
+    """
+    Read mapping JSON and return only valid {original: generated} pairs.
+    Accepted value formats for the generated path:
+      - plain string:  {"orig.png": "gen.png"}
+      - single-item list: {"orig.png": ["gen.png"]}
+      - multi-item list:  {"orig.png": ["gen1.png", "gen2.png", ...]}
+        -> each (original, generated) pair is expanded into its own entry.
+    """
     with open(mapping_json_path, "r") as f:
         data = json.load(f)
 
     if not isinstance(data, dict):
-        raise ValueError("Mapping JSON must be a dict of {original: generated}.")
+        raise ValueError("Mapping JSON must be a dict of {original: generated} or "
+                         "{original: [generated, ...]}.")
 
     valid = {}
     invalid_entries = []
-    for orig, gen in data.items():
-        orig_clean = sanitize_path(orig)
-        gen_clean  = sanitize_path(gen)
 
-        if not is_nonempty_str(orig_clean) or not is_nonempty_str(gen_clean):
-            invalid_entries.append((orig, gen, "empty_or_nonstring"))
+    for orig, gen_val in data.items():
+        orig_clean = sanitize_path(orig)
+        if not is_nonempty_str(orig_clean):
+            invalid_entries.append((orig, gen_val, "empty_or_nonstring_original"))
+            continue
+        if ENFORCE_IMAGE_EXTENSIONS and not has_valid_image_extension(orig_clean):
+            invalid_entries.append((orig_clean, gen_val, "bad_extension_original"))
             continue
 
-        if ENFORCE_IMAGE_EXTENSIONS:
-            if not has_valid_image_extension(orig_clean) or not has_valid_image_extension(gen_clean):
-                invalid_entries.append((orig_clean, gen_clean, "bad_extension"))
+        # Normalise generated value to a flat list of strings
+        if isinstance(gen_val, str):
+            gen_candidates = [gen_val]
+        elif isinstance(gen_val, list):
+            gen_candidates = gen_val
+        else:
+            invalid_entries.append((orig_clean, gen_val, "generated_not_str_or_list"))
+            continue
+
+        for gen in gen_candidates:
+            gen_clean = sanitize_path(gen)
+            if not is_nonempty_str(gen_clean):
+                invalid_entries.append((orig_clean, gen, "empty_or_nonstring_generated"))
                 continue
+            if ENFORCE_IMAGE_EXTENSIONS and not has_valid_image_extension(gen_clean):
+                invalid_entries.append((orig_clean, gen_clean, "bad_extension_generated"))
+                continue
+            # Use (orig, gen) as key — if orig appears multiple times the last wins,
+            # but each unique (orig, gen) pair becomes its own scoreable entry.
+            valid[f"{orig_clean}|||{gen_clean}"] = (orig_clean, gen_clean)
 
-        valid[orig_clean] = gen_clean
+    # Unpack back to a simple {orig: gen} dict keyed by the composite key
+    valid_flat = {v[0] + "|||" + v[1]: v for v in valid.values()}
+    # Return as a plain list of (orig, gen) tuples so main() can iterate cleanly
+    valid_pairs: Dict[str, str] = {v[0]: v[1] for v in valid_flat.values()}
 
-    print(f"[INFO] Mapping: total={len(data)}, valid={len(valid)}, invalid={len(invalid_entries)}")
+    print(f"[INFO] Mapping: total_keys={len(data)}, valid_pairs={len(valid_pairs)}, "
+          f"invalid_entries={len(invalid_entries)}")
     if invalid_entries:
-        log_path = os.path.join(os.path.dirname(mapping_json_path), "mapping_invalid_entries.log")
+        log_path = os.path.join(os.path.dirname(mapping_json_path),
+                                "mapping_invalid_entries.log")
         with open(log_path, "w", encoding="utf-8") as lf:
             for o, g, reason in invalid_entries:
                 lf.write(f"[INVALID ({reason})]: original={repr(o)} generated={repr(g)}\n")
         print(f"[WARN] Invalid entries written to: {log_path}")
-    return valid
+
+    return valid_pairs
 
 
 def auto_embedding_paths(mapping_json_path: str, metric: str) -> Tuple[str, str]:
